@@ -18,6 +18,8 @@ library(RColorBrewer)
 library(pROC)
 library(data.table) 
 library(randomForest)
+library(caTools)
+library(gtools)
 
 
 
@@ -31,7 +33,6 @@ VarSelectME<- function(checkDF){
   Max_Nodes<-NULL ## maximum number of terminal nodes.  20 to 25 is
   Sample_Size<-round(.3*Recs)  ## iteration sample size - 20% is usually good
   
-  library("randomForest")
   set.seed(100)
   temp <- randomForest(checkDF[,indvarsc],checkDF$DEP
                        ,sampsize=c(Sample_Size),do.trace=TRUE,importance=TRUE,ntree=N_trees,replace=FALSE,forest=TRUE
@@ -101,29 +102,73 @@ scaleME <- function(checkDF){
   
   return(checkDF)
 }
+
+#Calculate Logloss
+LogLoss <- function(DEP, score, eps=0.00001) {
+  score <- pmin(pmax(score, eps), 1-eps)
+  -1/length(DEP)*(sum(DEP*log(score)+(1-DEP)*log(1-score)))
+}
 ######################################################################################
 
 
+#read in the customer churn csv data file
+churnData <- read.csv("C:\\Users\\Kevin Pedde\\Documents\\R\\Work\\CustomerChurn\\customerchurn\\TelcoCustomerChurn.csv")
+
+###############################################################
+### Feature Engineering ###
+#will get to this later, just want to build some models to get baseline
+#ideas for new variables:
+# - Phone only
+# - Internet only
+# - paperless billing and auto pay
+
+#Okay lets create these variables
+churnData <- churnData %>%
+  mutate(PhoneOnly = if_else(PhoneService == 'Yes' & InternetService == 'No', 'Yes', 'No'),
+         InternetOnly = if_else(PhoneService == 'No' & InternetService != 'No', 'Yes', 'No'),
+         PhoneInternet = if_else(PhoneService == 'Yes' & InternetService != 'No', 'Yes', 'No'),
+         PaperlessAutoPay = if_else(PaperlessBilling == 'Yes' & 
+                                      PaymentMethod %in% c("Bank transfer (automatic)","Credit card (automatic)"), 'Yes', 'No'),
+         churn = if_else(Churn == 'Yes',1,0))
 
 
-library(reshape)
-inputdf <- rename(trainchurnData, c(team_name="X"))
+#first drop all tenure 0 people
+churnData <- churnData %>%
+  select(-customerID) %>% #deselect CustomerID
+  filter(tenure > 0) %>%
+  droplevels()
+
+## Create Dummy Variables ##
+dmy <- dummyVars(" ~ gender + Partner + Dependents + PhoneService +
+                 MultipleLines + InternetService + OnlineSecurity +
+                 OnlineBackup + DeviceProtection + TechSupport +
+                 StreamingTV + StreamingMovies + Contract + PaperlessBilling +
+                 PaymentMethod + PhoneOnly + InternetOnly + PaperlessAutoPay +
+                 PhoneInternet", 
+                 data = churnData,
+                 fullRank = FALSE)
+dmyData <- data.frame(predict(dmy, newdata = churnData))
+#print(head(dmyData))
+#strip the "." out of the column names
+colClean <- function(x){ colnames(x) <- gsub("\\.", "", colnames(x)); x } 
+dmyData <- colClean(dmyData) 
+
+#lets combine the new dummy variables back with the original continuous variables
+churnDataFinal <- cbind(dmyData, churnData[,c(2,5,18,19,25)])
+
+#lets get a traing and test data set using the createPartition function from Caret
+set.seed(420)
+inTrain <- createDataPartition(churnDataFinal$churn, p = 4/5, list = FALSE, times = 1)
+trainchurnData <- churnDataFinal[inTrain,]
+testchurnData <- churnDataFinal[-inTrain,]
+
+
 inputdf <- rename(trainchurnData, c(churn="DEP"))
+inputdf_test <- rename(testchurnData, c(churn="DEP"))
 
-## other options to import are the sas7bdat library (example below) and the R2SAS library
-## useR2SAS once available - not available on the CRAN as of 1/20/2012
-## library(sas7bdat)
-## inputdf <- read.sas7bdat("L:/Work/SAS Data/ESPN/Jack/Ad Click Model/Ad_click_master_rl.sas7bdat")
-
-## if you need to manually convert attributes below are some options
-## inputdf$PurchDate <- as.Date(inputdf$PurchDate,"%m/%d/%Y")
-## inputdf$WheelTypeID <- as.integer(inputdf$WheelTypeID)
-
+#Get names of columns
 names1 <- names(inputdf)
 #fix(names1)
-
-
-
 names2 <- c("genderFemale", "genderMale", "PartnerNo", "PartnerYes", "DependentsNo", 
             "DependentsYes", "PhoneServiceNo", "PhoneServiceYes", "MultipleLinesNo", 
             "MultipleLinesNophoneservice", "MultipleLinesYes", "InternetServiceDSL", 
@@ -147,14 +192,18 @@ names2 <- c("genderFemale", "genderMale", "PartnerNo", "PartnerYes", "Dependents
 inputdf_1 <- inputdf[names2]
 inputdf_1[is.na(inputdf_1)] <- 0
 
+inputdf_test1 <- inputdf_test[names2]
+inputdf_test1[is.na(inputdf_test1)] <- 0
+
 
 #summary(inputdf_1)
 ################################################################
 ## 2)split out the binary attributes
 
 ## see bottom section for the function called here (createBinaryDF)
-droppedBinDF <-createBinaryDF("DEP", inputdf_1)
 ## droppedBindf contains the X and DEP variables as well
+droppedBinDF <-createBinaryDF("DEP", inputdf_1)
+droppedBinDF_test <-createBinaryDF("DEP", inputdf_test1)
 
 ## now create the file with all non-binary attributes
 delVar <- names(droppedBinDF)
@@ -162,6 +211,7 @@ delVar <- names(droppedBinDF)
 ## delVar <- delVar[delVar != "DEP"]  ## Keep DEP
 mydropvars <- !((names(inputdf_1)) %in% (delVar))
 inputdf2 <- inputdf_1[mydropvars]
+inputdf_test2 <- inputdf_test1[mydropvars]
 
 
 
@@ -189,6 +239,12 @@ inputdf2 <- inputdf_1[mydropvars]
 ################################################################
 ## 5)Final File: combine all attributes
 Final <- cbind(droppedBinDF, inputdf2)
+Final_test <- cbind(droppedBinDF_test, inputdf_test2)
+
+#Final$DEP <- as.factor(as.character(Final$DEP))
+#Final_test$DEP <- as.factor(as.character(Final_test$DEP))
+
+summary(Final_test)
 summary(Final)
 
 ## drop all interim data
@@ -197,10 +253,6 @@ rm(trans_vars)
 rm(inputdf2)
 rm(delvar)
 rm(mydropvars)
-
-
-
-
 
 
 
@@ -243,7 +295,7 @@ fix(Top_N_Vars)
 Top_N_Vars <- c("ContractMonthtomonth", "tenure", "OnlineSecurityNo", "TechSupportNo", 
                 "InternetServiceFiberoptic", "TotalCharges", "MonthlyCharges", 
                 "PaymentMethodElectroniccheck", "ContractTwoyear", "InternetServiceDSL", 
-                "ContractOneyear", "OnlineBackupNo", "OnlineSecurityYes", 
+                "ContractOneyear", "OnlineBackupNo", "DeviceProtectionNo", "OnlineSecurityYes", 
                 "PaperlessBillingYes")
 
 
@@ -287,7 +339,6 @@ names(pred) <- "score"
 summary(pred)
 
 # Apply Deciles
-library(gtools)
 # 0.1 option makes 10 equal groups (.25 would be 4).  negative option (-pred$score) makes the highest score equal to 1
 rank <- data.frame(quantcut(-pred$score, q=seq(0, 1, 0.1), labels=F))
 names(rank) <- "rank"
@@ -296,11 +347,12 @@ names(rank) <- "rank"
 Final_Scored <- cbind(Final,pred,rank)
 
 #Run AUC
-library(caTools)
+#use the two different ways
 auc_out <- colAUC(Final_Scored$score, Final_Scored$DEP, plotROC=TRUE, alg=c("Wilcoxon","ROC"))
+rocObj <- roc(Final_Scored$DEP, Final_Scored$score)
+auc(rocObj)
 
 #Run Decile Report: do average of all model vars, avg DEP and min score, max score and avg score
-library(sqldf)
 decile_report <- sqldf("select rank, count(*) as qty, sum(DEP) as Responders, min(score) as min_score,
                        max(score) as max_score, avg(score) as avg_score
                        from Final_Scored
@@ -308,11 +360,68 @@ decile_report <- sqldf("select rank, count(*) as qty, sum(DEP) as Responders, mi
 
 write.csv(decile_report,"decile_report.csv")
 
-Final_Scored$score2 <- ifelse(Final_Scored$score > 0.78, 1, Final_Scored$score)
-
-
-LogLoss <- function(DEP, score, eps=0.00001) {
-  score <- pmin(pmax(score, eps), 1-eps)
-  -1/length(DEP)*(sum(DEP*log(score)+(1-DEP)*log(1-score)))
-}
+#Calculate the Logloss metric
 LogLoss(Final_Scored$DEP,Final_Scored$score)
+#0.4132963
+
+#find the Youden index to use as a cutoff for cunfusion matrix
+coords(rocObj, "b", ret="t", best.method="youden") # default
+#0.3083464
+
+#Classify row as 1/0 depending on what the calculated score is
+#play around with adjusting the score to maximize accuracy or any metric
+Final_Scored <- Final_Scored %>%
+  mutate(predClass = if_else(score > 0.51, 1, 0),
+         predClass = as.factor(as.character(predClass)),
+         DEPFac = as.factor(as.character(DEP)))
+
+#Calculate Confusion Matrix
+confusionMatrix(data = Final_Scored$predClass, 
+                reference = Final_Scored$DEPFac)
+
+
+#Now score the test set and find all the metrics (AUC, Logloss, etc)
+
+#now predict on the test set and compare results
+preds_test <- data.frame(predict(Final_RF, Final_test))
+#preds <- preds[c(-1)]
+names(preds_test) <- "score"
+summary(preds_test)
+
+# 0.1 option makes 10 equal groups (.25 would be 4).  negative option (-pred$score) makes the highest score equal to 1
+rank <- data.frame(quantcut(-preds_test$score, q=seq(0, 1, 0.1), labels=F))
+names(rank) <- "rank"
+
+predDataFinal_test_rf <- cbind(Final_test, preds_test, rank)
+
+rocObj <- roc(predDataFinal_test_rf$DEP, predDataFinal_test_rf$score)
+auc(rocObj)
+#0.8461
+
+#Run Decile Report: do average of all model vars, avg DEP and min score, max score and avg score
+decile_report_test <- sqldf("select rank, count(*) as qty, sum(DEP) as Responders, min(score) as min_score,
+                            max(score) as max_score, avg(score) as avg_score
+                            from predDataFinal_test_rf
+                            group by rank")
+
+write.csv(decile_report,"decile_report.csv")
+
+#Calculate the Logloss metric
+LogLoss(predDataFinal_test_rf$DEP,predDataFinal_test_rf$score)
+#0.4095148
+
+#find the Youden index to use as a cutoff for cunfusion matrix
+coords(rocObj, "b", ret="t", best.method="youden") # default
+#0.3687526
+
+#Classify row as 1/0 depending on what the calculated score is
+#play around with adjusting the score to maximize accuracy or any metric
+predDataFinal_test_rf <- predDataFinal_test_rf %>%
+  mutate(predClass = if_else(score > 0.51, 1, 0),
+         predClass = as.factor(as.character(predClass)),
+         DEPFac = as.factor(as.character(DEP)))
+
+#Calculate Confusion Matrix
+confusionMatrix(data = predDataFinal_test_rf$predClass, 
+                reference = predDataFinal_test_rf$DEPFac)
+
