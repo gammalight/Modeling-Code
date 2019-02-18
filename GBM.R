@@ -338,4 +338,55 @@ write.csv(decile_report,"decile_report.csv")
 
 #Calculate the Logloss metric
 LogLoss(Final_Scored$DEP,Final_Scored$score)
-#0.4132963
+#0.4129229
+
+
+
+#Now score against the test set to see how the model performs
+
+
+#now predict on the test set and compare results
+preds_test <- data.frame(predict(gbmModelFinal, Final_test[namesFinal]))
+#preds <- preds[c(-1)]
+names(preds_test) <- "score"
+preds_test$score = 1/(1 + exp(-preds_test$score))
+summary(preds_test)
+
+# 0.1 option makes 10 equal groups (.25 would be 4).  negative option (-pred$score) makes the highest score equal to 1
+rank <- data.frame(quantcut(-preds_test$score, q=seq(0, 1, 0.1), labels=F))
+names(rank) <- "rank"
+
+predDataFinal_test_gbm <- cbind(Final_test[namesFinal], preds_test, rank)
+
+rocObj <- roc(predDataFinal_test_gbm$DEP, predDataFinal_test_gbm$score)
+auc(rocObj)
+#0.8461
+
+#Run Decile Report: do average of all model vars, avg DEP and min score, max score and avg score
+decile_report_test <- sqldf("select rank, count(*) as qty, sum(DEP) as Responders, min(score) as min_score,
+                            max(score) as max_score, avg(score) as avg_score
+                            from predDataFinal_test_rf
+                            group by rank")
+
+write.csv(decile_report,"decile_report.csv")
+
+#Calculate the Logloss metric
+LogLoss(predDataFinal_test_gbm$DEP,predDataFinal_test_gbm$score)
+#0.4119137
+
+#find the Youden index to use as a cutoff for cunfusion matrix
+coords(rocObj, "b", ret="t", best.method="youden") # default
+#0.283182
+
+#Classify row as 1/0 depending on what the calculated score is
+#play around with adjusting the score to maximize accuracy or any metric
+predDataFinal_test_gbm <- predDataFinal_test_gbm %>%
+  mutate(predClass = if_else(score > 0.283182, 1, 0),
+         predClass = as.factor(as.character(predClass)),
+         DEPFac = as.factor(as.character(DEP)))
+
+#Calculate Confusion Matrix
+confusionMatrix(data = predDataFinal_test_gbm$predClass, 
+                reference = predDataFinal_test_gbm$DEPFac)
+
+
