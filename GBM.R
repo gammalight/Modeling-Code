@@ -221,12 +221,12 @@ gbmModel <- gbm(DEP ~ .,
                 data = Final, 
                 #var.monotone = c(0, 0, 0, 0, 0, 0),
                 distribution = "bernoulli", 
-                n.trees = 100, 
+                n.trees = 40, 
                 shrinkage = 0.1,
                 interaction.depth = 3, 
                 bag.fraction = 0.5, 
-                train.fraction = 0.5,
-                n.minobsinnode = 10, 
+                train.fraction = 0.8,
+                n.minobsinnode = 100, 
                 cv.folds = 5, 
                 keep.data = TRUE,
                 verbose = TRUE, 
@@ -279,7 +279,6 @@ TopnamesFinal <- c("ContractMonthtomonth","tenure","InternetServiceFiberoptic",
 #"PaperlessAutoPayNo",
 #"PaymentMethodMailedcheck",
 FinalModelData <- Final[namesFinal]
-FinalModelData$DEP <- as.factor(as.character(FinalModelData$DEP))
 
 gbmModelFinal <- gbm(DEP ~ ., 
                 data = FinalModelData, 
@@ -289,8 +288,8 @@ gbmModelFinal <- gbm(DEP ~ .,
                 shrinkage = 0.1,
                 interaction.depth = 3, 
                 bag.fraction = 0.5, 
-                train.fraction = 0.5,
-                n.minobsinnode = 10, 
+                train.fraction = 0.8,
+                n.minobsinnode = 100, 
                 cv.folds = 5, 
                 keep.data = FALSE,
                 verbose = TRUE, 
@@ -312,6 +311,7 @@ pred <- data.frame(predict.gbm(gbmModelFinal,newdata = FinalModelData[TopnamesFi
                    type="prob") ##type= options are response, prob. or votes
 pred <- pred[c(-2)]
 names(pred) <- "score"
+pred$score = 1/(1 + exp(-pred$score))
 summary(pred)
 
 # Apply Deciles
