@@ -28,14 +28,13 @@ xgb_trcontrol = caret::trainControl(method = "cv"
 # not how you want to tune a model
 # but since the data is small i figured id let it run
 xgb_trtune <- expand.grid(nrounds = 500
-                        , subsample = c(0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
-                        , eta = c(0.01, 0.1)
-                        , max_depth = c(20, 25, 30)
-                        , gamma = c(1, 2) 
-                        , colsample_bytree = c(0.4, 0.6, 0.8) 
-                        , min_child_weight = c(1, 2, 3, 4, 5, 6)
+                        , subsample = c(0.3)
+                        , eta = c(0.0085)
+                        , max_depth = c(8)
+                        , gamma = c(2) 
+                        , colsample_bytree = c(0.5) 
+                        , min_child_weight = c(25)
                         )
-
 
 # Set up to do parallel processing
 no_cores <- detectCores()  # Number of cores
@@ -44,12 +43,12 @@ registerDoParallel(no_cores)		# Registrer a parallel backend for train
 getDoParWorkers()
 
 t1 <- Sys.time()
-xgbTrain <- train(x = as.matrix(x)
-                  , y = y
-                  , trControl = xgb_trcontrol
-                  , tuneGrid = xgb_trtune
-                  , method = "xgbTree"
-                  , metric = "ROC")
+xgbTrain <- caret::train(x = as.matrix(x)
+                      , y = y
+                      , trControl = xgb_trcontrol
+                      , tuneGrid = xgb_trtune
+                      , method = "xgbTree"
+                      , metric = "ROC")
 t2 <- Sys.time()
 print(t2 - t1)
 stopCluster(cl)
